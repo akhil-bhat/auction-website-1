@@ -1,11 +1,14 @@
-import { db } from "./firebase.js";
+import { auth, db } from "./firebase.js";
 import { getItems, isDemo } from "./items.js";
 import { timeToString, dataListener } from "./auctions.js";
 import {
   doc,
   setDoc,
   getDoc,
+  getDocs,
   updateDoc,
+  collection,
+  writeBatch,
   deleteField,
   Timestamp,
 } from "https://www.gstatic.com/firebasejs/9.20.0/firebase-firestore.js";
@@ -39,12 +42,16 @@ function dataListenerCallback(data) {
       table.appendChild(row);
     }
     // Extract bid data
+    let item = bids[0];
     let bidCount = Object.keys(bids).length - 1;
-    row.children[1].innerText = bids[0].title;
-    row.children[2].innerText = `£${bids[bidCount].amount.toFixed(2)}`;
+    let currentBid = bids[bidCount];
+    row.children[1].innerText = item.title;
+    row.children[2].innerText = `${item.currency}${currentBid.amount.toFixed(
+      2
+    )}`;
     row.children[3].innerText = bidCount;
-    if (bids[bidCount].uid) {
-      getDoc(doc(db, "users", bids[bidCount].uid)).then((user) => {
+    if (currentBid.uid) {
+      getDoc(doc(db, "users", currentBid.uid)).then((user) => {
         row.children[4].innerText = user.get("name");
         console.debug("dataListener() read from users");
       });
@@ -55,14 +62,14 @@ function dataListenerCallback(data) {
     if (isDemo) {
       // Make sure some items always appear active for the demo
       let now = new Date();
-      let endTime = bids[0].endTime.toDate();
+      let endTime = item.endTime.toDate();
       endTime.setHours(now.getHours());
       endTime.setDate(now.getDate());
       endTime.setMonth(now.getMonth());
       endTime.setFullYear(now.getFullYear());
       row.children[5].dataset.endTime = endTime.getTime();
     } else {
-      row.children[5].dataset.endTime = bids[0].endTime.toMillis();
+      row.children[5].dataset.endTime = item.endTime.toMillis();
     }
   }
 }
@@ -122,5 +129,33 @@ function resetAll() {
   });
 }
 
+async function resetUsers() {
+  const users = await getDocs(collection(db, "users"));
+  let batches = [];
+  users.forEach((user) => {
+    // Add new writeBatch if:
+    //   - there are no batches
+    //   - the current batch is full
+    if (
+      batches.length == 0 ||
+      batches[batches.length - 1]._mutations.length % 500 == 0
+    ) {
+      batches.push(writeBatch(db));
+    }
+    // Add write to batch if not the current user
+    if (user.id != auth.currentUser.uid) {
+      const userRef = doc(db, "users", user.id);
+      batches[batches.length - 1].update(userRef, { admin: "" });
+    } else {
+      console.debug("Not resetting current user");
+    }
+  });
+  // Commit all batches
+  for await (const batch of batches) {
+    await batch.commit();
+  }
+}
+
 window.resetItem = resetItem;
 window.resetAll = resetAll;
+window.resetUsers = resetUsers;

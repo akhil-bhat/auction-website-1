@@ -1,4 +1,5 @@
 import { auth, db } from "./firebase.js";
+import { parseDoc } from "./auctions.js";
 import {
   doc,
   setDoc,
@@ -23,13 +24,15 @@ const signUpModalSubmit = signUpModal.querySelector(".btn-primary");
 export function autoSignIn() {
   onAuthStateChanged(auth, (user) => {
     if (user && user.displayName != null) {
+      console.debug(`Signed-in: name=${user.displayName}, uid=${user.uid}`);
       // If user has an anonymous account and a displayName, treat them as signed in
       authButton.innerText = "Sign out";
       document.getElementById("username-display").innerText =
         "Hi " + user.displayName;
       // If user is admin, display the admin button
       getDoc(doc(db, "users", user.uid)).then((user) => {
-        if ("admin" in user.data()) {
+        if (user.data().admin) {
+          console.debug("User is admin");
           adminButton.style.display = "inline-block";
         }
       });
@@ -72,7 +75,7 @@ function signUp() {
   let username = signUpModalInput;
   let user = auth.currentUser;
   updateProfile(user, { displayName: username.value });
-  setDoc(doc(db, "users", user.uid), { name: username.value, admin: false });
+  setDoc(doc(db, "users", user.uid), { name: username.value, admin: "" });
   console.debug("signUp() write to users/${auth.currentUser.uid}");
   authButton.innerText = "Sign out";
   document.getElementById("username-display").innerText =
@@ -130,12 +133,19 @@ if (bidModal) {
     }
   });
 
+  // Function for formatting bid field names
+  function fieldName(item, bid) {
+    const item_padded = item.toString().padStart(5, "0");
+    const bid_padded = bid.toString().padStart(5, "0");
+    return `item${item_padded}_bid${bid_padded}`;
+  }
+
   // Function that handles bidding logic
   function placeBid() {
     let nowTime = new Date().getTime();
     bidModalSubmit.setAttribute("disabled", ""); // disable the button while we check
-    let i = Number(bidModal.dataset.activeAuction.match("[0-9]+"));
-    let endTime = document.querySelector(`.card[data-id="${i}"]`).dataset
+    let itemId = Number(bidModal.dataset.activeAuction.match("[0-9]+"));
+    let endTime = document.querySelector(`.card[data-id="${itemId}"]`).dataset
       .endTime;
     let feedback = bidModal.querySelector(".invalid-feedback");
     // Cleanse input
@@ -164,14 +174,14 @@ if (bidModal) {
       let docRef = doc(db, "auction", "items");
       getDoc(docRef).then(function (doc) {
         console.debug("placeBid() read from auction/items");
-        let data = doc.data();
-        let itemId = `item${i.toString().padStart(5, "0")}`;
-        let bids = Object.keys(data).filter((key) => key.includes(itemId));
-        let bidId = `bid${bids.length.toString().padStart(5, "0")}`;
-        let currentBid = data[bids[bids.length - 1]].amount;
+        let bids = parseDoc(doc)[itemId];
+        let item = bids[0];
+        let bidId = Object.keys(bids).length;
+        let currentBid = bids[bidId - 1].amount;
+        console.debug(`itemId=${itemId} currentBid=${currentBid}`);
         if (amount >= 1 + currentBid) {
           updateDoc(docRef, {
-            [`${itemId}_${bidId}`]: {
+            [fieldName(itemId, bidId)]: {
               amount: amount,
               uid: auth.currentUser.uid,
             },
@@ -186,8 +196,9 @@ if (bidModal) {
           }, 1000);
         } else {
           amountElement.classList.add("is-invalid");
-          feedback.innerText =
-            "You must bid at least £" + (currentBid + 1).toFixed(2) + "!";
+          feedback.innerText = `You must bid at least ${item.currency}${(
+            currentBid + 1
+          ).toFixed(2)}!`;
           bidModalSubmit.removeAttribute("disabled", "");
         }
       });
